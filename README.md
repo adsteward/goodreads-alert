@@ -19,20 +19,23 @@ This repo is public (so GitHub Actions is free), so nothing identifying is store
 
 ## One-time setup
 
-### 1. Create a Gmail app password
-1. Make sure 2-Step Verification is on for your Google account (myaccount.google.com, then Security).
-2. Go to myaccount.google.com/apppasswords, create one named "Goodreads alert", and copy the 16-character password.
+### 1. Get a Resend API key (free)
+1. Sign up at resend.com with the email address you want alerts sent to.
+2. Go to **API Keys → Create API Key**, name it "Goodreads alert", choose **Sending access**, and copy the key (it starts with `re_` and is only shown once).
+
+Alerts come from `onboarding@resend.dev`. Without your own domain, Resend only delivers to the address you signed up with, which is all this needs. The free plan allows 100 emails a day.
+
+(Gmail works too: set `GMAIL_ADDRESS` and a 16-letter `GMAIL_APP_PASSWORD` instead of `RESEND_API_KEY`. App passwords require 2-Step Verification on the Google account.)
 
 ### 2. Add your secrets
-In the repo on GitHub, go to **Settings → Secrets and variables → Actions → New repository secret**. Add:
+In the repo on GitHub, go to **Settings → Secrets and variables → Actions → New repository secret**. Add each as its own secret:
 
 | Name | Value |
 |---|---|
 | `FRIEND_NAME` | her first name, as used in the subject line |
 | `PROFILE_URL` | her profile link, `https://www.goodreads.com/user/show/<id>-<name>` |
-| `GMAIL_ADDRESS` | the Gmail address that sends the alert |
-| `GMAIL_APP_PASSWORD` | the 16-character app password |
-| `ALERT_TO` | where alerts go (optional; defaults to `GMAIL_ADDRESS`) |
+| `RESEND_API_KEY` | the `re_...` key |
+| `ALERT_TO` | the address you signed up to Resend with |
 
 Workflow permissions don't need changing: the workflow file asks for the access it needs.
 
@@ -49,3 +52,4 @@ Run the workflow again without **Dry run**. This first real run records everythi
 * **Pausing:** **Actions → Goodreads check → ··· → Disable workflow**.
 * **Inactive repos:** GitHub pauses schedules in public repos after 60 days with no commits, so the workflow commits today's date to `heartbeat.txt` about every 20 days.
 * **Running locally:** copy `.env.example` to `.env`, fill in `FRIEND_NAME` and `PROFILE_URL`, then run `python check.py --dry-run`. Local runs print the full email.
+* **Test email:** with the email settings in `.env` too, `python check.py --test-email` sends you a preview of her newest update, with "(test)" in the subject. It saves nothing.

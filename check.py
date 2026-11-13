@@ -22,9 +22,12 @@ run locally, they're also read from a git-ignored .env file next to this
 script (see .env.example); real environment variables win.
   FRIEND_NAME         first name used in the email subject and greeting
   PROFILE_URL         https://www.goodreads.com/user/show/<id>-<name>
-  GMAIL_ADDRESS       Gmail account that sends the email
-  GMAIL_APP_PASSWORD  16-character Gmail app password
-  ALERT_TO            address that receives the email (defaults to GMAIL_ADDRESS)
+  ALERT_TO            address that receives the email
+  RESEND_API_KEY      Resend API key (resend.com, free); ALERT_TO must be the
+                      address you signed up to Resend with
+  GMAIL_ADDRESS       ...or send through Gmail instead: the Gmail account
+  GMAIL_APP_PASSWORD  and its 16-character app password (ALERT_TO defaults
+                      to GMAIL_ADDRESS)
   DRY_RUN             "true" behaves like --dry-run
   STATE_FILE          where seen items are kept (default: state.json, git-ignored)
 
@@ -33,6 +36,8 @@ so the script only logs counts there, never book titles or her status text.
 
 Flags:
   --dry-run              print the email instead of sending it; don't save state
+  --test-email           send a preview of her newest status to yourself,
+                         subject ending "(test)"; doesn't save state
   --status-file PATH     read the status page from a local file
   --profile-file PATH    read the profile page from a local file
   --now ISO              pretend current time (for testing)
@@ -46,6 +51,7 @@ import re
 import smtplib
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -282,9 +288,47 @@ def build_email(events, friend, profile_url, now):
 
 
 # ---------------------------------------------------------------- email / state
+def email_configured():
+    return bool(os.environ.get("RESEND_API_KEY") and os.environ.get("ALERT_TO")) or \
+           bool(os.environ.get("GMAIL_ADDRESS") and os.environ.get("GMAIL_APP_PASSWORD"))
+
+
+def recipient():
+    return os.environ.get("ALERT_TO") or os.environ.get("GMAIL_ADDRESS", "")
+
+
 def send_email(subject, body):
+    if os.environ.get("RESEND_API_KEY"):
+        send_via_resend(subject, body)
+    else:
+        send_via_gmail(subject, body)
+
+
+def send_via_resend(subject, body):
+    """Resend's free tier, sending from its shared test address. Without a
+    verified domain it can only deliver to the address you signed up with."""
+    payload = json.dumps({
+        "from": "Goodreads alert <onboarding@resend.dev>",
+        "to": [os.environ["ALERT_TO"]],
+        "subject": subject,
+        "text": body,
+    }).encode()
+    req = urllib.request.Request("https://api.resend.com/emails", data=payload, method="POST", headers={
+        "Authorization": f"Bearer {os.environ['RESEND_API_KEY'].strip()}",
+        "Content-Type": "application/json",
+        "User-Agent": "goodreads-alert/1.0",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+    except urllib.error.HTTPError as e:
+        # Resend explains problems (bad key, unverified recipient) in the body.
+        raise RuntimeError(f"Resend refused the email: HTTP {e.code} {e.read().decode(errors='replace')[:300]}")
+
+
+def send_via_gmail(subject, body):
     sender = os.environ["GMAIL_ADDRESS"]
-    to = os.environ.get("ALERT_TO") or sender
+    to = recipient()
     msg = EmailMessage()
     msg["Subject"], msg["From"], msg["To"] = subject, sender, to
     msg.set_content(body)
@@ -310,17 +354,23 @@ def save_state(state):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--test-email", action="store_true",
+                    help="email a preview of her newest status (subject ends in '(test)'); saves nothing")
     ap.add_argument("--status-file")
     ap.add_argument("--profile-file")
     ap.add_argument("--now", help="pretend current time (ISO, for testing)")
     args = ap.parse_args()
-    dry_run = args.dry_run or os.environ.get("DRY_RUN", "").lower() == "true"
+    dry_run = args.dry_run or args.test_email or os.environ.get("DRY_RUN", "").lower() == "true"
 
     friend = os.environ.get("FRIEND_NAME", "").strip()
     profile_url = os.environ.get("PROFILE_URL", "").strip()
     if not friend or not re.match(r"https://www\.goodreads\.com/user/show/\d+", profile_url):
         print("Set FRIEND_NAME and PROFILE_URL (https://www.goodreads.com/user/show/<id>-<name>) "
               "as GitHub secrets, or in a .env file for local runs.", file=sys.stderr)
+        return 1
+    if args.test_email and not email_configured():
+        print("--test-email needs RESEND_API_KEY and ALERT_TO (or GMAIL_ADDRESS and "
+              "GMAIL_APP_PASSWORD) in your .env file.", file=sys.stderr)
         return 1
     slug = profile_url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]     # "<id>-<name>"
     status_url = f"https://www.goodreads.com/user_status/list/{slug}"
@@ -363,9 +413,9 @@ def main():
     if first_run and not dry_run:
         print("First run: recording what's there now as already seen; no email.")
         events = []
-    elif first_run:
-        # Dry run with no saved state: preview the email her newest status would produce.
-        print("Dry run with no saved state: previewing her newest status update only.")
+    elif first_run or args.test_email:
+        # Preview the email her newest status would produce.
+        print("Previewing her newest status update only.")
         preview_state = {"seen_status": [s["id"] for s in statuses[1:]],
                          "reading": reading, "shelves": shelves}
         events = find_events(preview_state, statuses, reading, shelves, now)
@@ -379,7 +429,10 @@ def main():
             print(f"{'Would send' if dry_run else 'Sending'} an email with {len(events)} update(s).")
         else:
             print(body)
-        if not dry_run:
+        if args.test_email:
+            send_email(f"{subject} (test)", body)
+            print(f"Test email sent to {recipient()}.")
+        elif not dry_run:
             send_email(subject, body)
     else:
         print("Nothing new.")
