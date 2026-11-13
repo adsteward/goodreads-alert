@@ -3,7 +3,9 @@ name: Goodreads check
 on:
   schedule:
     - cron: "*/5 * * * *"   # every 5 min (GitHub often runs scheduled jobs a few minutes late)
-  workflow_dispatch:         # lets you run it by hand from the Actions tab
+  # GitHub's own schedule is unreliable, so cron-job.org also starts the
+  # workflow every 5 minutes through the API (a workflow_dispatch event).
+  workflow_dispatch:         # lets you (or cron-job.org) run it from outside
     inputs:
       dry_run:
         description: "Dry run: check the pages but don't send email or save anything"
@@ -69,7 +71,7 @@ jobs:
       # GitHub pauses schedules in public repos after 60 days without a commit.
       # This commits a date (and nothing else) to heartbeat.txt every ~20 days.
       - name: Heartbeat
-        if: github.event_name == 'schedule'
+        if: ${{ !inputs.dry_run }}
         run: |
           last=$(git log -1 --format=%ct)
           if [ $(( $(date +%s) - last )) -gt $(( 20 * 86400 )) ]; then
